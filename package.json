@@ -1,6 +1,6 @@
 {
   "name": "parse-diff",
-  "version": "0.8.1",
+  "version": "0.11.1",
   "description": "Unified diff parser",
   "author": "Sergey Todyshev <stodyshev@gmail.com>",
   "main": "index.js",
@@ -16,19 +16,20 @@
     "parser"
   ],
   "devDependencies": {
-    "@babel/cli": "^7.13.10",
-    "@babel/core": "^7.13.10",
-    "@babel/preset-env": "^7.13.10",
-    "eslint": "^7.22.0",
-    "eslint-config-prettier": "^8.1.0",
-    "eslint-plugin-prettier": "^3.3.1",
-    "jest": "^26.6.3",
-    "prettier": "^2.2.1"
+    "@babel/cli": "^7.21.0",
+    "@babel/core": "^7.21.3",
+    "@babel/preset-env": "^7.20.2",
+    "eslint": "^8.36.0",
+    "eslint-config-prettier": "^8.7.0",
+    "eslint-plugin-prettier": "^4.2.1",
+    "jest": "^29.5.0",
+    "prettier": "^2.8.5"
   },
   "scripts": {
-    "format": "eslint --fix parse.js __tests__/*.js",
+    "lint:fix": "eslint --fix parse.js __tests__/*.js",
     "lint": "eslint parse.js __tests__/*.js",
     "build": "babel -o index.js --minified parse.js",
-    "test": "jest"
+    "test": "jest",
+    "ci": "npm run lint && npm test"
   }
 }

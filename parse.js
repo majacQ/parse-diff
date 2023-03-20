@@ -10,6 +10,7 @@ module.exports = (input) => {
   let currentChunk = null;
   let deletedLineCounter = 0;
   let addedLineCounter = 0;
+  let currentFileChanges = null;
 
   const normal = (line) => {
     currentChunk?.changes.push({
@@ -19,6 +20,8 @@ module.exports = (input) => {
       ln2: addedLineCounter++,
       content: line,
     });
+    currentFileChanges.oldLines--;
+    currentFileChanges.newLines--;
   };
 
   const start = (line) => {
@@ -39,21 +42,36 @@ module.exports = (input) => {
     if (!currentFile || currentFile.chunks.length) start();
   };
 
-  const newFile = () => {
+  const newFile = (_, match) => {
     restart();
     currentFile.new = true;
+    currentFile.newMode = match[1];
     currentFile.from = "/dev/null";
   };
 
-  const deletedFile = () => {
+  const deletedFile = (_, match) => {
     restart();
     currentFile.deleted = true;
+    currentFile.oldMode = match[1];
     currentFile.to = "/dev/null";
   };
 
-  const index = (line) => {
+  const oldMode = (_, match) => {
+    restart();
+    currentFile.oldMode = match[1];
+  };
+
+  const newMode = (_, match) => {
+    restart();
+    currentFile.newMode = match[1];
+  };
+
+  const index = (line, match) => {
     restart();
     currentFile.index = line.split(" ").slice(1);
+    if (match[1]) {
+      currentFile.oldMode = currentFile.newMode = match[1].trim();
+    }
   };
 
   const fromFile = (line) => {
@@ -66,8 +84,12 @@ module.exports = (input) => {
     currentFile.to = parseOldOrNewFile(line);
   };
 
+  const toNumOfLines = (number) => +(number || 1);
+
   const chunk = (line, match) => {
-    if (!currentFile) return;
+    if (!currentFile) {
+      start(line);
+    }
 
     const [oldStart, oldNumLines, newStart, newNumLines] = match.slice(1);
 
@@ -77,9 +99,13 @@ module.exports = (input) => {
       content: line,
       changes: [],
       oldStart: +oldStart,
-      oldLines: +(oldNumLines || 1),
+      oldLines: toNumOfLines(oldNumLines),
       newStart: +newStart,
-      newLines: +(newNumLines || 1),
+      newLines: toNumOfLines(newNumLines),
+    };
+    currentFileChanges = {
+      oldLines: toNumOfLines(oldNumLines),
+      newLines: toNumOfLines(newNumLines),
     };
     currentFile.chunks.push(currentChunk);
   };
@@ -94,6 +120,7 @@ module.exports = (input) => {
       content: line,
     });
     currentFile.deletions++;
+    currentFileChanges.oldLines--;
   };
 
   const add = (line) => {
@@ -106,6 +133,7 @@ module.exports = (input) => {
       content: line,
     });
     currentFile.additions++;
+    currentFileChanges.newLines--;
   };
 
   const eof = (line) => {
@@ -123,30 +151,59 @@ module.exports = (input) => {
     });
   };
 
-  const schema = [
-    // TODO: better regexp to avoid detect normal line starting with diff
-    [/^\s+/, normal],
+  const schemaHeaders = [
     [/^diff\s/, start],
-    [/^new file mode \d+$/, newFile],
-    [/^deleted file mode \d+$/, deletedFile],
+    [/^new file mode (\d+)$/, newFile],
+    [/^deleted file mode (\d+)$/, deletedFile],
+    [/^old mode (\d+)$/, oldMode],
+    [/^new mode (\d+)$/, newMode],
     [/^index\s[\da-zA-Z]+\.\.[\da-zA-Z]+(\s(\d+))?$/, index],
     [/^---\s/, fromFile],
     [/^\+\+\+\s/, toFile],
     [/^@@\s+-(\d+),?(\d+)?\s+\+(\d+),?(\d+)?\s@@/, chunk],
-    [/^-/, del],
-    [/^\+/, add],
     [/^\\ No newline at end of file$/, eof],
   ];
 
-  const parseLine = (line) => {
-    for (const [pattern, handler] of schema) {
+  const schemaContent = [
+    [/^\\ No newline at end of file$/, eof],
+    [/^-/, del],
+    [/^\+/, add],
+    [/^\s+/, normal],
+  ];
+
+  const parseContentLine = (line) => {
+    for (const [pattern, handler] of schemaContent) {
       const match = line.match(pattern);
       if (match) {
         handler(line, match);
-        return true;
+        break;
       }
     }
-    return false;
+    if (
+      currentFileChanges.oldLines === 0 &&
+      currentFileChanges.newLines === 0
+    ) {
+      currentFileChanges = null;
+    }
+  };
+
+  const parseHeaderLine = (line) => {
+    for (const [pattern, handler] of schemaHeaders) {
+      const match = line.match(pattern);
+      if (match) {
+        handler(line, match);
+        break;
+      }
+    }
+  };
+
+  const parseLine = (line) => {
+    if (currentFileChanges) {
+      parseContentLine(line);
+    } else {
+      parseHeaderLine(line);
+    }
+    return;
   };
 
   for (const line of lines) parseLine(line);
@@ -154,8 +211,9 @@ module.exports = (input) => {
   return files;
 };
 
-const fileNameDiffRegex = /a\/.*(?=["']? ["']?b\/)|b\/.*$/g;
-const gitFileHeaderRegex = /^(a|b)\//;
+const fileNameDiffRegex =
+  /(a|i|w|c|o|1|2)\/.*(?=["']? ["']?(b|i|w|c|o|1|2)\/)|(b|i|w|c|o|1|2)\/.*$/g;
+const gitFileHeaderRegex = /^(a|b|i|w|c|o|1|2)\//;
 const parseFiles = (line) => {
   let fileNames = line?.match(fileNameDiffRegex);
   return fileNames?.map((fileName) =>
@@ -181,7 +239,8 @@ const leftTrimChars = (string, trimmingChars) => {
   return string.replace(new RegExp(`^${trimmingString}+`), "");
 };
 
-const timeStampRegex = /\t.*|\d{4}-\d\d-\d\d\s\d\d:\d\d:\d\d(.\d+)?\s(\+|-)\d\d\d\d/;
+const timeStampRegex =
+  /\t.*|\d{4}-\d\d-\d\d\s\d\d:\d\d:\d\d(.\d+)?\s(\+|-)\d\d\d\d/;
 const removeTimeStamp = (string) => {
   const timeStamp = timeStampRegex.exec(string);
   if (timeStamp) {
